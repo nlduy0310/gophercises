@@ -23,14 +23,23 @@ type Result struct {
 	recordedAnswer string
 }
 
-func (q *Question) showQuestion() {
-	fmt.Printf("Question: %s\nAnswer: ", q.prompt)
-	var userAnswer string
-	_, err := fmt.Scanln(&userAnswer)
-	if err != nil {
-		q.result = Result{""}
-	} else {
-		q.result = Result{userAnswer}
+func (q *Question) showQuestion(resChannel chan string, timer *time.Timer, onTimerExpires func()) {
+	go func() {
+		fmt.Printf("Question: %s\nAnswer: ", q.prompt)
+		var userAnswer string
+		fmt.Scanln(&userAnswer)
+		resChannel <- userAnswer
+	}()
+
+	select {
+	case x := <-resChannel:
+		{
+			q.result = Result{x}
+		}
+	case <-timer.C:
+		{
+			onTimerExpires()
+		}
 	}
 }
 
@@ -45,6 +54,7 @@ type QuestionSet struct {
 
 type SetResult struct {
 	questionCount int
+	answeredCount int
 	correctCount  int
 }
 
@@ -61,32 +71,50 @@ func (set *QuestionSet) shuffle(nRound int) {
 
 }
 
-func (set *QuestionSet) startQuiz() {
+func (set *QuestionSet) startQuiz(timeLimit int) {
 	n := len(set.questions)
 
-	for i := 0; i < n; i++ {
-		set.questions[i].showQuestion()
+	timer := time.NewTimer(time.Duration(timeLimit) * time.Second)
+	response := make(chan string, 1)
+	defer close(response)
+
+	timesUp := false
+	for i := 0; !timesUp && i < n; i++ {
+		set.questions[i].showQuestion(response, timer, func() { timesUp = true })
 	}
+
+	if timesUp {
+		fmt.Printf("\n\n--------------- TIME'S UP!!! -------------------\n\n")
+	}
+
+	set.judge()
+	set.printResult()
 }
 
 func (set *QuestionSet) judge() {
 	questionCount := len(set.questions)
 	var correctCount = 0
+	var answeredCount = 0
 	for i := 0; i < questionCount; i++ {
-		if set.questions[i].compareAnswers() {
-			correctCount++
+		if len(set.questions[i].result.recordedAnswer) > 0 {
+			answeredCount++
+			if set.questions[i].compareAnswers() {
+				correctCount++
+			}
 		}
 	}
 	set.result = SetResult{
 		questionCount: questionCount,
+		answeredCount: answeredCount,
 		correctCount:  correctCount,
 	}
 }
 
 func (set *QuestionSet) printResult() {
 	fmt.Println("--------------------------------------")
-	fmt.Printf("%-8s: %-5d\n", "Total", set.result.questionCount)
-	fmt.Printf("%-8s: %-5d\n", "Correct", set.result.correctCount)
+	fmt.Printf("%-10s: %-5d\n", "Total", set.result.questionCount)
+	fmt.Printf("%-10s: %-5d\n", "Answered", set.result.answeredCount)
+	fmt.Printf("%-10s: %-5d\n", "Correct", set.result.correctCount)
 	fmt.Println("--------------------------------------")
 }
 
@@ -148,27 +176,6 @@ func main() {
 	fmt.Println("Press enter to start")
 	fmt.Scanln()
 
-	done := make(chan int, 1)
-	defer close(done)
-
-	go func() {
-		questionSet.startQuiz()
-		done <- 1
-	}()
-
-	select {
-	case <-done:
-		{
-			questionSet.judge()
-			questionSet.printResult()
-		}
-	case <-time.After(time.Duration(*timeLimitPtr) * time.Second):
-		{
-			fmt.Println("\n\n\n--------------------------------------")
-			fmt.Println("TIMES UP!!!")
-			questionSet.judge()
-			questionSet.printResult()
-		}
-	}
+	questionSet.startQuiz(*timeLimitPtr)
 
 }
